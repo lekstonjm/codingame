@@ -169,7 +169,7 @@ struct ClassDiagram {
         queue<weak_ptr<ClassNode>> look_for;
         look_for.push(found_parent);
         while (look_for.size() > 0) {
-            weak_ptr<ClassNode> current = look_for.back();
+            weak_ptr<ClassNode> current = look_for.front();
             look_for.pop();
             if (current.lock()->hasInterface(query.methods) && current.lock()->hasProperties(query.properties)) {
                 return current;
@@ -420,7 +420,7 @@ int main()
         },
     };
     queue<string> text_queue;
-    auto test = tests[2];
+    auto test = tests[9];
     sort(test.begin(),test.end(),[](auto a, auto b) { return a.size() < b.size() ;}); 
     for (auto item : test ) {
         text_queue.push(item);
