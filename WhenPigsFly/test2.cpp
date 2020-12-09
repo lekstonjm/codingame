@@ -64,6 +64,7 @@ struct ClassQuery {
     string name;
     vector<string> methods;
     vector<string> properties;
+    bool isSimple() { return methods.size() == 0 && properties.size() == 0; }
 };
 
 struct ClassNode {
@@ -77,26 +78,22 @@ struct ClassNode {
     ClassNode() {}
     ClassNode(const string &name_) { name = name_; }
 
-    bool hasParent(weak_ptr<ClassNode> node) {
+    bool hasParent(weak_ptr<ClassNode> node) const {
         return find_if(begin(parents), end(parents),[&](auto parent_node) {return parent_node.lock()->name == node.lock()->name;}) != end(parents);
     }
-    bool hasChild(weak_ptr<ClassNode> node) {
+    bool hasChild(weak_ptr<ClassNode> node) const {
         return find_if(begin(children), end(children),[&](auto child_node) {return child_node.lock()->name == node.lock()->name;}) != end(children);
     }
-    bool hasProperty(weak_ptr<ClassNode> node) {
+    bool hasProperty(weak_ptr<ClassNode> node) const {
         return find_if(begin(properties), end(properties),[&](auto property_node) {return property_node.lock()->name == node.lock()->name;}) != end(properties);
     }
-    bool hasProperties(vector<weak_ptr<ClassNode>> nodes) {
+    bool hasProperties(vector<weak_ptr<ClassNode>> nodes) const {
         for (auto node:nodes) {
             if (!hasProperty(node)) return false;
         }
         return true;
     }
-    bool hasProperty(weak_ptr<ClassNode> node) {
-        return find_if(begin(properties), end(properties),[&](auto property_node) {return property_node.lock()->name == node.lock()->name;}) != end(properties);
-    }
-
-    bool hasProperty(const string &property_name) {
+    bool hasProperty(const string &property_name) const {
         return find_if(begin(properties), end(properties),[&](auto property_node) {return property_node.lock()->name == property_name;}) != end(properties);        
     }
     bool hasProperties(const vector<string> &name) {
@@ -105,7 +102,6 @@ struct ClassNode {
         }
         return true;
     }
-
     bool hasMethod(const string &method) {
         return find(begin(methods),end(methods),method) != end(methods);
     }
@@ -115,7 +111,6 @@ struct ClassNode {
         }
         return true;
     }
-
     void addParent(weak_ptr<ClassNode> node) {
         if (!hasParent(node)) { parents.push_back(node); }
     }
@@ -162,11 +157,17 @@ ostream &operator <<(ostream &os, const ClassNode &cl) {
 
 struct ClassDiagram {
     map<string,shared_ptr<ClassNode>> dictionary;
-     weak_ptr<ClassNode> find(const ClassQuery &query) {
-        auto found_parent = dictionary.find(query.name);
+
+    weak_ptr<ClassNode> find(const string &name) {
+        auto found_parent = dictionary.find(name);
         if (found_parent == end(dictionary) || !(*found_parent).second) { return {}; }
+        return (*found_parent).second;
+    }
+    weak_ptr<ClassNode> find(const ClassQuery &query) {
+        auto found_parent = find(query.name);
+        if (found_parent.expired()) return {};
         queue<weak_ptr<ClassNode>> look_for;
-        look_for.push((*found_parent).second);
+        look_for.push(found_parent);
         while (look_for.size() > 0) {
             weak_ptr<ClassNode> current = look_for.back();
             look_for.pop();
@@ -179,6 +180,26 @@ struct ClassDiagram {
             }
         }
         return {};
+    }
+    weak_ptr<ClassNode> createNode(const string &name) {
+        shared_ptr<ClassNode> node(new ClassNode(name));
+        dictionary[name] = node;
+        return node;
+    } 
+    weak_ptr<ClassNode> createNode(const ClassQuery &query) {
+        shared_ptr<ClassNode> node(new ClassNode(query.name));
+        for (auto method:query.methods) {
+            node->addMethod(method);
+        }
+        for (auto property_name:query.properties) {
+            auto found_property = find(property_name);
+            if (found_property.expired()) {
+                found_property = createNode(property_name);
+            }
+            node->addProperty(found_property);
+        }
+        dictionary[query.name] = node;
+        return node;
     }
 };
 
@@ -199,46 +220,48 @@ struct Parser
 
     bool assertion(Lexer &lexer, ClassDiagram& graph) {
         //cerr << "assertion" << endl;
-        ClassNode class_query = fullId(lexer,graph);        
+        ClassQuery class_query = fullId(lexer);
+        weak_ptr<ClassNode> class_node = graph.find(class_query);
+        if (class_node.expired() && class_query.isSimple()) {
+            class_node = graph.createNode(class_query.name); 
+        }
+        if (class_node.expired()) return false;
         Symbol symbol;
         if ( (symbol.id = Symbol::ARE) && accept(lexer, symbol) ) { 
-            weak_ptr<ClassNode> parent_node = inherit(lexer,graph);
+            ClassQuery parent_query = inherit(lexer);
+            weak_ptr<ClassNode> parent_node = graph.find(parent_query);
             if (parent_node.expired()) {
-                return false;
+                parent_node = graph.createNode(parent_query); 
             }
-            weak_ptr<ClassNode> class_node = graph.find(class_query);
-            if (class_node.expired()) { return false; }
             class_node.lock()->addParent(parent_node);
             parent_node.lock()->addChild(class_node);
         } else if ( (symbol.id = Symbol::HAVE) && accept(lexer, symbol) ) {
-            weak_ptr<ClassNode> class_node = graph.findOrCreate(class_query);
-            weak_ptr<ClassNode> property_node = property(lexer,graph);
+            string property_name = property(lexer);
+            weak_ptr<ClassNode> property_node = graph.find(property_name);
+            if (property_node.expired()) {
+                property_node = graph.createNode(property_name); 
+            }
             class_node.lock()->addProperty(property_node);
         } else if ( (symbol.id = Symbol::CAN) && accept(lexer, symbol) ) {
-            weak_ptr<ClassNode> class_node = graph.findOrCreate(class_query);
             class_node.lock()->addMethod(method(lexer));
         }
         return true;
     } 
     
-    weak_ptr<ClassNode> inherit(Lexer &lexer, ClassDiagram &graph) { 
+    ClassQuery inherit(Lexer &lexer) { 
         //cerr << "inherit" << endl;
-        ClassNode class_query = fullId(lexer,graph);
-        weak_ptr<ClassNode> class_node = graph.findOrCreate(class_query);
-        return class_node;
+         return  fullId(lexer);
     } 
 
-    weak_ptr<ClassNode> property(Lexer &lexer, ClassDiagram &graph) {
+    string property(Lexer &lexer) {
         //cerr << "property" << endl; 
-        string name = id(lexer);
-        ClassNode query(name);
-        return  graph.findOrCreate(query);
+        return  id(lexer);
     }
     string method(Lexer &lexer) {
         //cerr << "method" << endl;
         return id(lexer);
     }
-    ClassQuery fullId(Lexer &lexer, ClassDiagram &graph) {
+    ClassQuery fullId(Lexer &lexer) {
         //cerr << "fullid" << endl;
         //conjunction.clauses.insert(begin(conjunction.clauses), base.getRegisteredClause({Clause::ID,id(lexer)}));
         ClassQuery query;
@@ -246,7 +269,7 @@ struct Parser
         lexer.nextSymbol();
         Symbol symbol;
         if ( (symbol.id = Symbol::WITH) && accept(lexer,symbol) ) {
-            vector<string> property_names = properties(lexer,graph);
+            vector<string> property_names = properties(lexer);
             query.properties =  property_names;
         }
         if ( (symbol.id = Symbol::THAT_CAN) && accept(lexer, symbol) ) {
@@ -256,7 +279,7 @@ struct Parser
         return query;
     }
 
-    vector<string> properties(Lexer &lexer, ClassDiagram &graph) {
+    vector<string> properties(Lexer &lexer) {
         vector<string> property_names;
         property_names.push_back(id(lexer));
         lexer.nextSymbol();
@@ -283,6 +306,7 @@ struct Parser
         }
         return method_names;
     }
+
     string id(Lexer &lexer) {
         lexer.nextSymbol();
         Symbol symbol;
@@ -396,8 +420,8 @@ int main()
         },
     };
     queue<string> text_queue;
-    auto test = tests[0];
-    sort(test.begin(),test.end()); 
+    auto test = tests[2];
+    sort(test.begin(),test.end(),[](auto a, auto b) { return a.size() < b.size() ;}); 
     for (auto item : test ) {
         text_queue.push(item);
     }
@@ -412,8 +436,9 @@ int main()
         cerr << item.first << "=>" << (*item.second) << endl;        
     }
 
-    ClassNode query("PIGS");
-    query.addMethod("FLY");
+    ClassQuery query;
+    query.name = "PIGS";
+    query.methods.push_back("FLY");
     weak_ptr<ClassNode> result = graph.find(query);
     if (result.expired()) {
         cout << "No pigs can fly" << endl;
