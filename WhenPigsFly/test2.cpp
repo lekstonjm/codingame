@@ -62,94 +62,59 @@ struct Lexer {
 
 struct ClassQuery {
     string name;
-    vector<string> methods;
-    vector<string> properties;
+    set<string> methods;
+    set<string> properties;
     bool isSimple() { return methods.size() == 0 && properties.size() == 0; }
 };
 
 struct ClassNode {
     string name;
-    vector<weak_ptr<ClassNode>> parents;
-    vector<weak_ptr<ClassNode>> children;
-    vector<string> methods;
-    vector<weak_ptr<ClassNode>> properties;
-    vector<weak_ptr<ClassNode>> owner;
+    set<string> parents;
+    set<string> children;
+    set<string> methods;
+    set<string> properties;
+    set<string> owners;
 
     ClassNode() {}
     ClassNode(const string &name_) { name = name_; }
 
-    bool hasParent(weak_ptr<ClassNode> node) const {
-        return find_if(begin(parents), end(parents),[&](auto parent_node) {return parent_node.lock()->name == node.lock()->name;}) != end(parents);
-    }
-    bool hasChild(weak_ptr<ClassNode> node) const {
-        return find_if(begin(children), end(children),[&](auto child_node) {return child_node.lock()->name == node.lock()->name;}) != end(children);
-    }
-    bool hasProperty(weak_ptr<ClassNode> node) const {
-        return find_if(begin(properties), end(properties),[&](auto property_node) {return property_node.lock()->name == node.lock()->name;}) != end(properties);
-    }
-    bool hasProperties(vector<weak_ptr<ClassNode>> nodes) const {
-        for (auto node:nodes) {
-            if (!hasProperty(node)) return false;
+    bool hasInterface(const set<string> &method_set) {
+        for (auto method_name:method_set) {
+            if (methods.find(method_name) == methods.end()) return false;
         }
         return true;
     }
-    bool hasProperty(const string &property_name) const {
-        return find_if(begin(properties), end(properties),[&](auto property_node) {return property_node.lock()->name == property_name;}) != end(properties);        
-    }
-    bool hasProperties(const vector<string> &name) {
-        for (auto property_name:properties) {
-            if (!hasProperty(property_name)) return false;
+
+    bool hasProperties(const set<string> &property_set) {
+        for (auto property_name:property_set) {
+            if (properties.find(property_name) == properties.end()) return false;
         }
         return true;
     }
-    bool hasMethod(const string &method) {
-        return find(begin(methods),end(methods),method) != end(methods);
-    }
-    bool hasInterface(const vector<string> &methods_) {
-        for (auto method:methods_) {
-            if (!hasMethod(method)) return false;
-        }
-        return true;
-    }
-    void addParent(weak_ptr<ClassNode> node) {
-        if (!hasParent(node)) { parents.push_back(node); }
-    }
-    void addChild(weak_ptr<ClassNode> node) {
-        if (!hasChild(node)) { children.push_back(node); }
-        for(auto property:properties) {
-            node.lock()->addProperty(property);
-        }
-        for (auto method:methods) {
-            node.lock()->addMethod(method);
-        }
-    }
-    void addProperty(weak_ptr<ClassNode> node) {
-        if (!hasProperty(node)) { properties.push_back(node); }
-        for(auto child:children) { child.lock()->addProperty(node); }
-    }
-    void addMethod(const string &method) {
-        if (!hasMethod(method)) { methods.push_back(method); }
-        for(auto child:children) { child.lock()->addMethod(method); }
-    }
+
     friend ostream &operator << (ostream &, const ClassNode &);
 };
 ostream &operator <<(ostream &os, const ClassNode &cl) {
     os << cl.name;
     os << ", m[";
     for (auto parent:cl.parents) {
-        os << " " << parent.lock()->name;
+        os << " " << parent;
     }
     os <<" ], c[";
     for (auto child:cl.children) {
-        os << " " <<  child.lock()->name;
+        os << " " <<  child;
     }
     os <<" ], p[";
     for (auto property:cl.properties) {
-        os << " " <<  property.lock()->name;
+        os << " " <<  property;
     }
     os << " ], i[";
     for (auto method:cl.methods) {
         os << " " <<  method;
+    }
+    os << " ], o[";
+    for (auto owner:cl.owners) {
+        os << " " <<  owner;
     }
     os <<" ]";
     return os;
@@ -158,48 +123,77 @@ ostream &operator <<(ostream &os, const ClassNode &cl) {
 struct ClassDiagram {
     map<string,shared_ptr<ClassNode>> dictionary;
 
-    weak_ptr<ClassNode> find(const string &name) {
+    shared_ptr<ClassNode> find(const string &name) {
         auto found_parent = dictionary.find(name);
         if (found_parent == end(dictionary) || !(*found_parent).second) { return {}; }
         return (*found_parent).second;
     }
-    weak_ptr<ClassNode> find(const ClassQuery &query) {
+    shared_ptr<ClassNode> find(const ClassQuery &query) {
         auto found_parent = find(query.name);
-        if (found_parent.expired()) return {};
-        queue<weak_ptr<ClassNode>> look_for;
+        if (!found_parent) return {};
+        queue<shared_ptr<ClassNode>> look_for;
         look_for.push(found_parent);
         while (look_for.size() > 0) {
-            weak_ptr<ClassNode> current = look_for.front();
+            shared_ptr<ClassNode> current = look_for.front();
             look_for.pop();
-            if (current.lock()->hasInterface(query.methods) && current.lock()->hasProperties(query.properties)) {
+            if (current->hasInterface(query.methods) && current->hasProperties(query.properties)) {
                 return current;
             } else {
-                for (auto child:current.lock()->children) {
-                    look_for.push(child);
+                for (auto child:current->children) {
+
+                    look_for.push(dictionary[child]);
                 }
             }
         }
         return {};
     }
-    weak_ptr<ClassNode> createNode(const string &name) {
+    shared_ptr<ClassNode> createNode(const string &name) {
         shared_ptr<ClassNode> node(new ClassNode(name));
         dictionary[name] = node;
         return node;
     } 
-    weak_ptr<ClassNode> createNode(const ClassQuery &query) {
-        shared_ptr<ClassNode> node(new ClassNode(query.name));
-        for (auto method:query.methods) {
-            node->addMethod(method);
-        }
-        for (auto property_name:query.properties) {
-            auto found_property = find(property_name);
-            if (found_property.expired()) {
-                found_property = createNode(property_name);
+
+    void createInheritance( shared_ptr<ClassNode> parent_node, shared_ptr<ClassNode> child_node)  {
+        if (parent_node && child_node) {
+            parent_node->children.insert(child_node->name);
+            child_node->parents.insert(parent_node->name);
+            for (auto method_name:parent_node->methods) {
+                addMethod(child_node, method_name);
             }
-            node->addProperty(found_property);
+            for (auto property_name:parent_node->properties) {
+                shared_ptr<ClassNode> property_node = dictionary[property_name];                
+                addProperty(child_node,property_node);
+            }
+            for (auto owner_name:child_node->owners) {
+                shared_ptr<ClassNode> owner_node = dictionary[owner_name];
+                addProperty(owner_node, parent_node);
+            }
+        }        
+    }
+
+    void addProperty( shared_ptr<ClassNode> class_node, shared_ptr<ClassNode> property_node) {
+        if (class_node && property_node) {
+            class_node->properties.insert(property_node->name);
+            property_node->owners.insert(class_node->name);
+            for (auto child_name:class_node->children) {
+                shared_ptr<ClassNode> child_node = dictionary[child_name];
+                addProperty(child_node, property_node);
+            } 
+            for (auto property_parent_name:property_node->parents) {
+                shared_ptr<ClassNode> property_parent_node = dictionary[property_parent_name];
+                addProperty(class_node, property_parent_node);
+            }
         }
-        dictionary[query.name] = node;
-        return node;
+    }
+
+    void addMethod(shared_ptr<ClassNode> class_node, const string &method_name) {
+        if (class_node) {
+            class_node->methods.insert(method_name);
+            for (auto child_name:class_node->children) {
+                shared_ptr<ClassNode> child_node = dictionary[child_name];
+                addMethod(child_node, method_name);
+            } 
+        }
     }
 };
 
@@ -221,29 +215,43 @@ struct Parser
     bool assertion(Lexer &lexer, ClassDiagram& graph) {
         //cerr << "assertion" << endl;
         ClassQuery class_query = fullId(lexer);
-        weak_ptr<ClassNode> class_node = graph.find(class_query);
-        if (class_node.expired() && class_query.isSimple()) {
+        shared_ptr<ClassNode> class_node = graph.find(class_query);
+        if (!class_node && class_query.isSimple()) {
             class_node = graph.createNode(class_query.name); 
         }
-        if (class_node.expired()) return false;
+        if (!class_node) return false;
         Symbol symbol;
         if ( (symbol.id = Symbol::ARE) && accept(lexer, symbol) ) { 
             ClassQuery parent_query = inherit(lexer);
-            weak_ptr<ClassNode> parent_node = graph.find(parent_query);
-            if (parent_node.expired()) {
-                parent_node = graph.createNode(parent_query); 
+            shared_ptr<ClassNode> parent_node = graph.find(parent_query);
+            if (!parent_node) {
+                parent_node = graph.find(parent_query.name);
             }
-            class_node.lock()->addParent(parent_node);
-            parent_node.lock()->addChild(class_node);
+            if (!parent_node) {
+                parent_node = graph.createNode(parent_query.name); 
+            }
+            graph.createInheritance(parent_node, class_node);
+            for (auto property_name:parent_query.properties) {
+                shared_ptr<ClassNode> property_node = graph.find(property_name);
+                if (!property_node) {
+                    property_node = graph.createNode(property_name);                
+                }
+                graph.addProperty(class_node,property_node);
+            }
+            for (auto method_name:parent_query.methods) {
+                graph.addMethod(class_node, method_name );
+            }
+
         } else if ( (symbol.id = Symbol::HAVE) && accept(lexer, symbol) ) {
             string property_name = property(lexer);
-            weak_ptr<ClassNode> property_node = graph.find(property_name);
-            if (property_node.expired()) {
+            shared_ptr<ClassNode> property_node = graph.find(property_name);
+            if (!property_node) {
                 property_node = graph.createNode(property_name); 
             }
-            class_node.lock()->addProperty(property_node);
+            graph.addProperty(class_node, property_node);
         } else if ( (symbol.id = Symbol::CAN) && accept(lexer, symbol) ) {
-            class_node.lock()->addMethod(method(lexer));
+            string method_name = method(lexer);
+            graph.addMethod(class_node, method_name);
         }
         return true;
     } 
@@ -270,11 +278,15 @@ struct Parser
         Symbol symbol;
         if ( (symbol.id = Symbol::WITH) && accept(lexer,symbol) ) {
             vector<string> property_names = properties(lexer);
-            query.properties =  property_names;
+            for (auto property_name:property_names) {
+                query.properties.insert(property_name);
+            }
         }
         if ( (symbol.id = Symbol::THAT_CAN) && accept(lexer, symbol) ) {
             vector<string> method_names = interface(lexer);
-            query.methods = method_names;
+            for (auto method_name:method_names) {
+                query.methods.insert(method_name);
+            }
         }
         return query;
     }
@@ -420,17 +432,21 @@ int main()
         },
     };
     queue<string> text_queue;
-    auto test = tests[9];
+    auto test = tests[8];
     sort(test.begin(),test.end(),[](auto a, auto b) { return a.size() < b.size() ;}); 
     for (auto item : test ) {
         text_queue.push(item);
     }
+    set<string> redo;
     while (text_queue.size() > 0) {
         string text = text_queue.front();
         text_queue.pop();
-        if (!parser.parse(lexer,graph,text)) {
+        if (!parser.parse(lexer,graph,text) && redo.find(text) != end(redo) ) {
             text_queue.push(text);
-        }
+            redo.insert(text);
+        } else {
+            redo.clear();
+        }        
     }
     for (auto item:graph.dictionary) {
         cerr << item.first << "=>" << (*item.second) << endl;        
@@ -438,11 +454,11 @@ int main()
 
     ClassQuery query;
     query.name = "PIGS";
-    query.methods.push_back("FLY");
-    weak_ptr<ClassNode> result = graph.find(query);
-    if (result.expired()) {
+    query.methods.insert("FLY");
+    shared_ptr<ClassNode> result = graph.find(query);
+    if (!result) {
         cout << "No pigs can fly" << endl;
-    } else if (result.lock()->name != "PIGS") {
+    } else if (result->name != "PIGS") {
         cout << "Some pigs can fly" << endl;
     } else {
         cout << "All pigs can fly" << endl;
