@@ -432,7 +432,7 @@ int main()
         },
     };
     queue<string> text_queue;
-    auto test = tests[8];
+    auto test = tests[6];
     sort(test.begin(),test.end(),[](auto a, auto b) { return a.size() < b.size() ;}); 
     for (auto item : test ) {
         text_queue.push(item);
@@ -441,7 +441,7 @@ int main()
     while (text_queue.size() > 0) {
         string text = text_queue.front();
         text_queue.pop();
-        if (!parser.parse(lexer,graph,text) && redo.find(text) != end(redo) ) {
+        if (!parser.parse(lexer,graph,text) && redo.find(text) == end(redo) ) {
             text_queue.push(text);
             redo.insert(text);
         } else {
