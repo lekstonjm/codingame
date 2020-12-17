@@ -9,43 +9,43 @@ using namespace std;
 
 struct Cell {
     char operation;
-    int index1;
-    int index2;
-    int value1;
-    int value2;
+    pair<int,int> arg1;
+    pair<int,int> arg2;
     int value;
     bool has_value;
+
+    static pair<int,int> translate(const string &argument) {
+        int index = -1;
+        int value = 0;
+        if (argument[0] =='$') {
+            index = atoi(argument.substr(1).c_str()); 
+        } else if(argument[0] != '_') {
+            value = atoi(argument.c_str());
+        }
+        return {index, value};
+    }
+
     void setOperation(const string &operation_,const string &argument1,const string &argument2) {
         operation = operation_[0];
-        auto translate = [](const string &argument) {
-            int index = -1;
-            int value = 0;
-            if (argument[0] =='$') {
-                index = atoi(argument.substr(1).c_str()); 
-            } else if(argument[0] != '_') {
-                value = atoi(argument.c_str());
-            }
-            return make_tuple(index, value);
-        };
-        tie(index1,value1) = translate(argument1);
-        tie(index2,value2) = translate(argument2);
-        if (index1 == -1 && index2 == -1) {
+        arg1 = translate(argument1);
+        arg2 = translate(argument2);
+        if (arg1.first == -1 && arg2.first == -1) {
             evaluate();    
         }
     }
     void evaluate() {
         switch(operation) {
             case 'V':
-            value = value1;
+            value = arg1.second;
             break;
             case 'A':
-            value = value1 + value2;
+            value = arg1.second + arg2.second;
             break;
             case 'S':
-            value = value1 - value2;
+            value = arg1.second - arg2.second;
             break;
             case 'M':
-            value = value1 * value2;
+            value = arg1.second * arg2.second;
             break;
         }
         has_value = true;
@@ -54,24 +54,29 @@ struct Cell {
 
 struct Sheet {
     vector<Cell> cells;
+
     int getValue(int cell_index) {
         if (cells[cell_index].has_value) return cells[cell_index].value;
         stack<int> stack;
         stack.push(cell_index);
+        auto deref = [&](pair<int,int> &argument)->bool {
+            bool can_compute = true;
+            if (argument.first >= 0) {
+                if (!cells[argument.first].has_value) {
+                    can_compute = false;
+                    stack.push(argument.first);
+                } else {
+                    argument.second = cells[argument.first].value;
+                }
+            }
+            return can_compute;
+        };
         while (!stack.empty()) {
             Cell &current_cell = cells[stack.top()];
             bool can_compute = true;
-            if (!cells[current_cell.index1].has_value) {
-                can_compute = false;
-                stack.push(current_cell.index1);
-            }
-            if (!cells[current_cell.index2].has_value) {
-                can_compute = false;
-                stack.push(current_cell.index2);
-            }
+            can_compute = can_compute && deref(current_cell.arg1);
+            can_compute = can_compute && deref(current_cell.arg2);
             if (!can_compute) continue;
-            current_cell.value1 = cells[current_cell.index1].value;
-            current_cell.value2 = cells[current_cell.index2].value;
             current_cell.evaluate();
             stack.pop();
         }
@@ -82,13 +87,13 @@ struct Sheet {
 int main()
 {
     int N;
-
+/*
     vector<tuple<string,string,string>> statements = {
         {"VALUE","3","_"},
         {"ADD","$0","4"}
     };
+*/
 
-/*
     vector<tuple<string,string,string>> statements = {
     {"SUB","$33","$64"},
     {"ADD","$60","$60"},
@@ -183,7 +188,7 @@ int main()
     {"ADD","$61","$36"},
     {"SUB","$4","$54"}
     };
-*/
+
     N = statements.size();
     //cin >> N; cin.ignore();
     Sheet sheet;
